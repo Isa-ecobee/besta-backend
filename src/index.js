@@ -26,7 +26,11 @@ const clients = {
 (async () => {
     await redisClient.connect();
     await redisClient.set('consecutive_not_ok', '0');
+    await redisClient.set('snooze_until', '0');
     await redisClient.set('siren_active', 'false');
+    await redisClient.set('alert_active', 'false');
+    await redisClient.set('tstat_response', 'false');
+    await redisClient.set('mobile_response', 'false');
 })();
 
 // WebSocket connection handler
@@ -49,9 +53,28 @@ wss.on('connection', (ws, req) => {
     });
 });
 
+// Poll thermostat for response
+async function pollThermostat() {
+    const alertActive = await redisClient.get('alert_active');
+    if (alertActive === 'true') {
+        const tstatResponse = await redisClient.get('tstat_response');
+        if (tstatResponse === 'false' && clients.tstat) {
+            clients.tstat.send(JSON.stringify({ type: 'check_response' }));
+        }
+    }
+}
+
+// Start polling every 5 seconds
+setInterval(pollThermostat, 5000);
+
 // Handle messages from embedded device
 async function handleEmbeddedMessage(data) {
     const status = data.status;
+    const snoozeUntil = parseInt(await redisClient.get('snooze_until'));
+    
+    if (Date.now() < snoozeUntil) {
+        return; // Ignore messages during snooze period
+    }
 
     if (status === 0) { // Not OK
         const currentCount = parseInt(await redisClient.get('consecutive_not_ok')) || 0;
@@ -64,6 +87,7 @@ async function handleEmbeddedMessage(data) {
     } else { // OK
         await redisClient.set('consecutive_not_ok', '0');
         await redisClient.set('siren_active', 'false');
+        await redisClient.set('alert_active', 'false');
         broadcastToAll({ type: 'stop_siren' });
     }
 }
@@ -73,24 +97,50 @@ async function handleDeviceResponse(deviceType, data) {
     const action = data.action;
     
     switch (action) {
+        case 'snooze':
+            await redisClient.set('snooze_until', (Date.now() + 30000).toString());
+            await redisClient.set('consecutive_not_ok', '0');
+            await redisClient.set('alert_active', 'false');
+            broadcastToAll({ type: 'alert_handled', action: 'snooze' });
+            break;
         case 'dismiss':
             await redisClient.set('consecutive_not_ok', '0');
+            await redisClient.set('alert_active', 'false');
+            broadcastToAll({ type: 'alert_handled', action: 'dismiss' });
             break;
         case 'escalate':
             await redisClient.set('siren_active', 'true');
-            broadcastToAll({ type: 'start_siren' });
+            await redisClient.set('alert_active', 'false');
+            broadcastToAll({ type: 'alert_handled', action: 'escalate' });
+            break;
+        case 'response_received':
+            await redisClient.set(`${deviceType}_response`, 'true');
+            const mobileResponse = await redisClient.get('mobile_response');
+            const tstatResponse = await redisClient.get('tstat_response');
+            
+            if (mobileResponse === 'true' || tstatResponse === 'true') {
+                broadcastToAll({ 
+                    type: 'response_received',
+                    device: deviceType,
+                    canTrigger: true
+                });
+            }
             break;
     }
 }
 
 // Trigger alert to all devices
 async function triggerAlert() {
+    await redisClient.set('alert_active', 'true');
+    await redisClient.set('tstat_response', 'false');
+    await redisClient.set('mobile_response', 'false');
+    
     broadcastToAll({ type: 'alert' });
     
     // Set timeout for no response
     setTimeout(async () => {
-        const responses = await redisClient.get('device_responses');
-        if (!responses) {
+        const alertActive = await redisClient.get('alert_active');
+        if (alertActive === 'true') {
             await redisClient.set('siren_active', 'true');
             broadcastToAll({ type: 'start_siren' });
         }
