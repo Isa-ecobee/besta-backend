@@ -1,112 +1,103 @@
 const express = require('express');
-const WebSocket = require('ws');
-const Redis = require('redis');
-const cron = require('node-cron');
-require('dotenv').config();
-
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// Redis client setup
-const redisClient = Redis.createClient({
-    url: process.env.REDIS_URL || 'redis://localhost:6379'
+// Middleware to parse JSON
+app.use(express.json());
+
+// Configuration
+const THRESHOLD = 5; // Number of consecutive readings before triggering
+let consecutiveReadings = [];
+let currentState = null;
+
+// Mock functions for broadcasting events
+function sendToMobile(isOn, count) {
+  console.log(`📱 Mobile notification: Sensor ${isOn ? 'ON' : 'OFF'} for ${count} consecutive readings`);
+  // Mock implementation - in real app, this would send push notification
+}
+
+function sendToThermostat(isOn, count) {
+  console.log(`🌡️ Thermostat update: Sensor ${isOn ? 'ON' : 'OFF'} for ${count} consecutive readings`);
+  // Mock implementation - in real app, this would adjust thermostat settings
+}
+
+// Sensor polling endpoint
+app.get('/sensorPolling', (req, res) => {
+  const { isOn } = req.query;
+  
+  // Validate input
+  if (isOn === undefined) {
+    return res.status(400).json({ 
+      error: 'Missing required parameter: isOn' 
+    });
+  }
+  
+  // Convert string to boolean
+  const sensorState = isOn === 'true';
+  
+  console.log(`📊 Received sensor reading: ${sensorState ? 'ON' : 'OFF'}`);
+  
+  // Check if this is the same as the current consecutive state
+  if (currentState === sensorState) {
+    // Same state, increment consecutive count
+    consecutiveReadings.push(sensorState);
+  } else {
+    // State changed, reset consecutive readings
+    consecutiveReadings = [sensorState];
+    currentState = sensorState;
+  }
+  
+  console.log(`📈 Consecutive ${sensorState ? 'ON' : 'OFF'} readings: ${consecutiveReadings.length}`);
+  
+  // Check if we've hit the threshold
+  if (consecutiveReadings.length >= THRESHOLD) {
+    console.log(`🚨 THRESHOLD REACHED! ${consecutiveReadings.length} consecutive ${sensorState ? 'ON' : 'OFF'} readings`);
+    
+    // Broadcast to consumers
+    sendToMobile(sensorState, consecutiveReadings.length);
+    sendToThermostat(sensorState, consecutiveReadings.length);
+    
+    // Reset after broadcasting (optional - depending on your use case)
+    // consecutiveReadings = [];
+  }
+  
+  // Return current status
+  res.json({
+    success: true,
+    currentState: sensorState,
+    consecutiveCount: consecutiveReadings.length,
+    threshold: THRESHOLD,
+    thresholdReached: consecutiveReadings.length >= THRESHOLD
+  });
 });
 
-// WebSocket server setup
-const wss = new WebSocket.Server({ port: 8080 });
-
-// Store connected clients
-const clients = {
-    mobile: null,
-    tstat: null,
-    embedded: null
-};
-
-// Initialize Redis connection
-(async () => {
-    await redisClient.connect();
-    await redisClient.set('consecutive_not_ok', '0');
-    await redisClient.set('siren_active', 'false');
-})();
-
-// WebSocket connection handler
-wss.on('connection', (ws, req) => {
-    const clientType = req.url.split('=')[1]; // Get client type from URL
-    clients[clientType] = ws;
-
-    ws.on('message', async (message) => {
-        const data = JSON.parse(message);
-        
-        if (clientType === 'embedded') {
-            await handleEmbeddedMessage(data);
-        } else if (clientType === 'mobile' || clientType === 'tstat') {
-            await handleDeviceResponse(clientType, data);
-        }
-    });
-
-    ws.on('close', () => {
-        clients[clientType] = null;
-    });
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    currentState,
+    consecutiveCount: consecutiveReadings.length
+  });
 });
 
-// Handle messages from embedded device
-async function handleEmbeddedMessage(data) {
-    const status = data.status;
+// Reset endpoint (useful for testing)
+app.post('/reset', (req, res) => {
+  consecutiveReadings = [];
+  currentState = null;
+  console.log('🔄 State reset');
+  res.json({ success: true, message: 'State reset successfully' });
+});
 
-    if (status === 0) { // Not OK
-        const currentCount = parseInt(await redisClient.get('consecutive_not_ok')) || 0;
-        const newCount = currentCount + 1;
-        await redisClient.set('consecutive_not_ok', newCount.toString());
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Sensor polling server running on port ${PORT}`);
+  console.log(`📊 Threshold set to ${THRESHOLD} consecutive readings`);
+  console.log('\nTest endpoints:');
+  console.log(`- GET /sensorPolling?isOn=true`);
+  console.log(`- GET /sensorPolling?isOn=false`);
+  console.log(`- GET /health`);
+  console.log(`- POST /reset`);
+});
 
-        if (newCount >= 6) {
-            await triggerAlert();
-        }
-    } else { // OK
-        await redisClient.set('consecutive_not_ok', '0');
-        await redisClient.set('siren_active', 'false');
-        broadcastToAll({ type: 'stop_siren' });
-    }
-}
-
-// Handle responses from mobile and tstat
-async function handleDeviceResponse(deviceType, data) {
-    const action = data.action;
-    
-    switch (action) {
-        case 'dismiss':
-            await redisClient.set('consecutive_not_ok', '0');
-            break;
-        case 'escalate':
-            await redisClient.set('siren_active', 'true');
-            broadcastToAll({ type: 'start_siren' });
-            break;
-    }
-}
-
-// Trigger alert to all devices
-async function triggerAlert() {
-    broadcastToAll({ type: 'alert' });
-    
-    // Set timeout for no response
-    setTimeout(async () => {
-        const responses = await redisClient.get('device_responses');
-        if (!responses) {
-            await redisClient.set('siren_active', 'true');
-            broadcastToAll({ type: 'start_siren' });
-        }
-    }, 60000);
-}
-
-// Broadcast message to all connected clients
-function broadcastToAll(message) {
-    Object.values(clients).forEach(client => {
-        if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(message));
-        }
-    });
-}
-
-// Start HTTP server
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-}); 
+module.exports = app;
