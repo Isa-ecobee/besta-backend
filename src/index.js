@@ -26,7 +26,6 @@ const clients = {
 (async () => {
     await redisClient.connect();
     await redisClient.set('consecutive_not_ok', '0');
-    await redisClient.set('snooze_until', '0');
     await redisClient.set('siren_active', 'false');
 })();
 
@@ -53,11 +52,6 @@ wss.on('connection', (ws, req) => {
 // Handle messages from embedded device
 async function handleEmbeddedMessage(data) {
     const status = data.status;
-    const snoozeUntil = parseInt(await redisClient.get('snooze_until'));
-    
-    if (Date.now() < snoozeUntil) {
-        return; // Ignore messages during snooze period
-    }
 
     if (status === 0) { // Not OK
         const currentCount = parseInt(await redisClient.get('consecutive_not_ok')) || 0;
@@ -79,10 +73,6 @@ async function handleDeviceResponse(deviceType, data) {
     const action = data.action;
     
     switch (action) {
-        case 'snooze':
-            await redisClient.set('snooze_until', (Date.now() + 30000).toString());
-            await redisClient.set('consecutive_not_ok', '0');
-            break;
         case 'dismiss':
             await redisClient.set('consecutive_not_ok', '0');
             break;
