@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 // Configuration
-const THRESHOLD = 5; // Number of consecutive readings before triggering
+const THRESHOLD = 1; // Number of consecutive readings before triggering
 let consecutiveReadings = [];
 let currentState = null;
 
@@ -14,11 +14,36 @@ let currentState = null;
 function sendToMobile(isOn, count) {
   console.log(`📱 Mobile notification: Sensor ${isOn ? 'ON' : 'OFF'} for ${count} consecutive readings`);
   // Mock implementation - in real app, this would send push notification
-}
 
-function sendToThermostat(isOn, count) {
+}
+// Add the correct imports
+const { notifyThermostat,
+  pollTstatForDismissal,
+  triggerTstatAlarm,
+  checkSensorForSiren } = require('./broadcasting');
+
+// ...existing code...
+
+async function sendToThermostat(isOn, count) {
   console.log(`🌡️ Thermostat update: Sensor ${isOn ? 'ON' : 'OFF'} for ${count} consecutive readings`);
-  // Mock implementation - in real app, this would adjust thermostat settings
+  
+  try {
+    // Step 1: Notify thermostat
+    await notifyThermostat();
+    console.log('📬 Initial thermostat notification sent');
+
+    // Step 2: Poll for dismissal
+    const pollResult = await pollTstatForDismissal();
+    console.log(`📊 Poll result: ${pollResult}`);
+
+    // Step 3: If timeout, trigger alarm
+    if (pollResult === 'timeout') {
+      console.log('⚠️ Notification timed out, triggering alarm...');
+      await triggerTstatAlarm();
+    }
+  } catch (error) {
+    console.error('❌ Error in thermostat communication:', error.message);
+  }
 }
 
 // Sensor polling endpoint
@@ -36,6 +61,13 @@ app.get('/sensorPolling', (req, res) => {
   const sensorState = isOn === 'true';
   
   console.log(`📊 Received sensor reading: ${sensorState ? 'ON' : 'OFF'}`);
+
+  // Check if this sensor reading should stop the siren
+  if (checkSensorForSiren(sensorState)) {
+    // ADD MOBILE LOGIC IN HERE ^
+    console.log('🔕 Siren stopped due to sensor ON signal');
+}
+    
   
   // Check if this is the same as the current consecutive state
   if (currentState === sensorState) {
