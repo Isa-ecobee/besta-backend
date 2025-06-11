@@ -1,3 +1,6 @@
+require('dotenv').config();
+const { exec } = require('child_process');
+
 const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,9 +14,16 @@ let consecutiveReadings = [];
 let currentState = null;
 
 // Mock functions for broadcasting events
+const { sendPushNotification } = require('./pushNotifier'); // add this at top
+
 function sendToMobile(isOn, count) {
   console.log(`📱 Mobile notification: Sensor ${isOn ? 'ON' : 'OFF'} for ${count} consecutive readings`);
-  // Mock implementation - in real app, this would send push notification
+
+  // Only send push if ON and threshold is hit
+  if (isOn && count >= THRESHOLD) {
+    const token = process.env.FIREBASE_TOKEN || 'your-default-token-here';
+    sendPushNotification(token);
+  }
 }
 
 function sendToThermostat(isOn, count) {
@@ -88,6 +98,9 @@ app.post('/reset', (req, res) => {
   console.log('🔄 State reset');
   res.json({ success: true, message: 'State reset successfully' });
 });
+
+// Validate the token at startup
+exec('GOOGLE_APPLICATION_CREDENTIALS=~/Downloads/home-prod-324a8e2ecbb8.json go run cmd/notification_helper/main.go validate -token <your-token> -project eco-release');
 
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
