@@ -77,7 +77,7 @@ The service accepts WebSocket connections on port 8080. Connect using the follow
 ### From Mobile/Thermostat
 ```json
 {
-    "action": "snooze"  // "snooze", "dismiss", or "escalate"
+    "action": "dismiss"  // "dismiss", or "escalate"
 }
 ```
 
