@@ -90,7 +90,7 @@ app.post('/reset', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Sensor polling server running on port ${PORT}`);
   console.log(`📊 Threshold set to ${THRESHOLD} consecutive readings`);
   console.log('\nTest endpoints:');

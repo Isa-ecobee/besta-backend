@@ -38,6 +38,25 @@ redis-server
 npm start
 ```
 
+
+## Deployment
+
+### Setup gcloud to correct region
+`gcloud auth configure-docker northamerica-northeast2-docker.pkg.dev`
+
+### Build Image
+`docker build --platform linux/amd64 -t besta-backend .`
+
+### Tag
+`docker tag besta-backend northamerica-northeast2-docker.pkg.dev/hack-the-hive-season-13/heat-the-hive/besta-backend:latest`
+
+### Push
+`docker push northamerica-northeast2-docker.pkg.dev/hack-the-hive-season-13/heat-the-hive/besta-backend:latest`
+
+### Deploy Cloud run
+Go to https://console.cloud.google.com/run/detail/northamerica-northeast2/besta-backend/metrics?inv=1&invt=AbzyWg&project=hack-the-hive-season-13
+and deploy a new cloud run revision.
+
 ## WebSocket Connections
 
 The service accepts WebSocket connections on port 8080. Connect using the following URLs:
